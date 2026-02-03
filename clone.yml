@@ -24,7 +24,7 @@ on:
       docker_image:
         description: "Docker image to deploy (e.g., registry.fly.io/my-app:latest)"
         required: true
-        default: "registry.fly.io/ancodeai-app:latest"
+        default: "node:20-alpine"
 
 jobs:
   clone-push-deploy:
@@ -74,20 +74,43 @@ jobs:
         uses: superfly/flyctl-actions/setup-flyctl@master
         with:
           version: "0.3.94"
-      - name: Add fly.toml locally for deployment
+      - name: Add fly.toml and Dockerfile for deployment
         run: |
           cd /tmp/source-repo
+          
+          # Create Dockerfile
+          cat << 'DOCKERFILE' > Dockerfile
+          FROM node:20-alpine
+          
+          # Install git and pnpm
+          RUN apk add --no-cache git openssh-client && npm install -g pnpm
+          
+          WORKDIR /app
+          
+          # Copy package files
+          COPY package*.json pnpm-lock.yaml* ./
+          
+          # Install dependencies
+          RUN pnpm install || npm install
+          
+          # Copy all files
+          COPY . .
+          
+          # Initialize git for later updates
+          RUN git init && git config user.email "bot@needware.dev" && git config user.name "Needware Bot"
+          
+          EXPOSE 8080
+          
+          # Start dev server
+          CMD ["sh", "-c", "pnpm run dev --host 0.0.0.0 --port 8080 || npm run dev -- --host 0.0.0.0 --port 8080"]
+          DOCKERFILE
+          
+          # Create fly.toml
           cat << 'EOF' > fly.toml
-          # fly.toml app configuration file generated dynamically
-          #
-          # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-          #
-
           app = '${{ github.event.inputs.fly_app_name }}'
           primary_region = 'sin'
 
           [build]
-            image = '${{ github.event.inputs.docker_image }}'
 
           [http_service]
             internal_port = 8080
@@ -104,7 +127,10 @@ jobs:
             cpus = 1
             memory_mb = 1024
           EOF
-          echo "Created fly.toml locally at /tmp/source-repo with image ${{ github.event.inputs.docker_image }}:"
+          
+          echo "Created Dockerfile and fly.toml:"
+          cat Dockerfile
+          echo "---"
           cat fly.toml
       - name: Create Fly.io app via API
         run: |

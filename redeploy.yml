@@ -15,7 +15,7 @@ on:
       docker_image:
         description: 'Docker image to deploy'
         required: true
-        default: 'registry.fly.io/needware-app:latest'
+        default: 'node:20-alpine'
       client_id:
         description: 'Client ID for callback'
         required: true
@@ -37,15 +37,38 @@ jobs:
           git clone ${{ github.event.inputs.source_repo_url }} /tmp/source-repo
           cd /tmp/source-repo
 
-      - name: Create fly.toml
+      - name: Create Dockerfile and fly.toml
         run: |
           cd /tmp/source-repo
+          
+          # Create Dockerfile if not exists
+          if [ ! -f Dockerfile ]; then
+            cat << 'DOCKERFILE' > Dockerfile
+          FROM node:20-alpine
+          
+          RUN apk add --no-cache git openssh-client && npm install -g pnpm
+          
+          WORKDIR /app
+          
+          COPY package*.json pnpm-lock.yaml* ./
+          RUN pnpm install || npm install
+          
+          COPY . .
+          
+          RUN git init && git config user.email "bot@needware.dev" && git config user.name "Needware Bot"
+          
+          EXPOSE 8080
+          
+          CMD ["sh", "-c", "pnpm run dev --host 0.0.0.0 --port 8080 || npm run dev -- --host 0.0.0.0 --port 8080"]
+          DOCKERFILE
+          fi
+          
+          # Create fly.toml
           cat << 'EOF' > fly.toml
           app = '${{ github.event.inputs.fly_app_name }}'
           primary_region = 'sin'
 
           [build]
-            image = '${{ github.event.inputs.docker_image }}'
 
           [http_service]
             internal_port = 8080

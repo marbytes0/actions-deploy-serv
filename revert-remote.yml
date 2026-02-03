@@ -28,7 +28,7 @@ jobs:
 
       - name: Clone source repository
         run: |
-          git clone https://x-access-token:${{ github.event.inputs.github_token }}@github.com/wordixai/${{ github.event.inputs.repo_name }} /tmp/source-repo
+          git clone https://x-access-token:${{ github.event.inputs.github_token }}@github.com/marbytes0/${{ github.event.inputs.repo_name }} /tmp/source-repo
           cd /tmp/source-repo
           git checkout ${{ github.event.inputs.branch }}
 
@@ -73,5 +73,5 @@ jobs:
 
       - name: Verify deployment
         run: |
-          echo "Reverted commit ${{ github.event.inputs.commit_sha }} in: https://github.com/wordixai/${{ github.event.inputs.repo_name }}"
+          echo "Reverted commit ${{ github.event.inputs.commit_sha }} in: https://github.com/marbytes0/${{ github.event.inputs.repo_name }}"
           echo "Triggered Fly revert for app: ${{ github.event.inputs.fly_app_name }}"
