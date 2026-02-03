@@ -1,0 +1,73 @@
+name: Install Dependencies on Fly.io
+
+on:
+  workflow_dispatch:
+    inputs:
+      fly_api_token:
+        description: 'Fly.io API Token'
+        required: true
+      fly_app_name:
+        description: 'Fly.io App Name'
+        required: true
+      custom_dependencies:
+        description: 'Custom dependencies to install (space separated)'
+        required: false
+        default: ''
+      git_user_email:
+        description: 'Git user email'
+        required: false
+        default: 'github-actions@github.com'
+      git_user_name:
+        description: 'Git user name'
+        required: false
+        default: 'GitHub Actions'
+      commit_message:
+        description: 'Commit message'
+        required: false
+        default: 'Update dependencies'
+      client_id:
+        description: 'Client ID for callback'
+        required: true
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+        with:
+          version: '0.3.94'
+
+      - name: Install dependencies on Fly.io machine
+        env:
+          FLY_API_TOKEN: ${{ github.event.inputs.fly_api_token }}
+        run: |
+          echo "Installing dependencies on Fly.io app: ${{ github.event.inputs.fly_app_name }}"
+          
+          INSTALL_CMD="cd /app && pnpm install"
+          
+          if [ -n "${{ github.event.inputs.custom_dependencies }}" ]; then
+            INSTALL_CMD="cd /app && pnpm add ${{ github.event.inputs.custom_dependencies }}"
+          fi
+          
+          flyctl ssh console --app ${{ github.event.inputs.fly_app_name }} -C "sh -c '$INSTALL_CMD'" || {
+            echo "Failed to install dependencies"
+            exit 1
+          }
+
+      - name: Commit changes if custom dependencies
+        if: ${{ github.event.inputs.custom_dependencies != '' }}
+        env:
+          FLY_API_TOKEN: ${{ github.event.inputs.fly_api_token }}
+        run: |
+          flyctl ssh console --app ${{ github.event.inputs.fly_app_name }} -C "sh -c '\
+            cd /app && \
+            git config user.email \"${{ github.event.inputs.git_user_email }}\" && \
+            git config user.name \"${{ github.event.inputs.git_user_name }}\" && \
+            git add package.json pnpm-lock.yaml && \
+            git commit -m \"${{ github.event.inputs.commit_message }}\" && \
+            git push origin main'" || echo "No changes to commit"
+
+      - name: Verify installation
+        run: |
+          echo "Dependencies installed on: https://${{ github.event.inputs.fly_app_name }}.fly.dev"
