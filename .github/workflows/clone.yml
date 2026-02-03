@@ -160,11 +160,8 @@ jobs:
           cd /tmp/source-repo
           echo "Deploying to Fly.io app: ${{ github.event.inputs.fly_app_name }}"
           
-          # Authenticate to Fly registry
-          flyctl auth docker
-          
-          # Deploy with remote builder
-          flyctl deploy --app ${{ github.event.inputs.fly_app_name }} --remote-only --wait-timeout 300 || {
+          # Deploy with depot disabled to avoid 401 registry errors
+          flyctl deploy --app ${{ github.event.inputs.fly_app_name }} --remote-only --depot=false --wait-timeout 300 || {
             echo "Deployment failed. Fly.io status:"
             flyctl status --app ${{ github.event.inputs.fly_app_name }}
             exit 1
