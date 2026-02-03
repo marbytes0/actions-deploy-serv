@@ -1,0 +1,72 @@
+name: Deploy to Cloudflare Pages
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository_url:
+        description: 'GitHub Repository URL (owner/repo format)'
+        required: true
+      cloudflare_api_token:
+        description: 'Cloudflare API Token'
+        required: true
+      cloudflare_account_id:
+        description: 'Cloudflare Account ID'
+        required: true
+      cloudflare_project_name:
+        description: 'Cloudflare Pages Project Name'
+        required: true
+      github_token:
+        description: 'GitHub Token'
+        required: true
+      app_id:
+        description: 'App ID for callback'
+        required: true
+      custom_domain:
+        description: 'Custom domain (optional)'
+        required: false
+        default: ''
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.inputs.repository_url }}
+          token: ${{ github.event.inputs.github_token }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build project
+        run: pnpm run build
+
+      - name: Deploy to Cloudflare Pages
+        id: deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ github.event.inputs.cloudflare_api_token }}
+          accountId: ${{ github.event.inputs.cloudflare_account_id }}
+          command: pages deploy dist --project-name=${{ github.event.inputs.cloudflare_project_name }}
+
+      - name: Send callback notification
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ] && [ "${{ steps.deploy.outcome }}" == "success" ]; then
+            STATUS="completed"
+          else
+            STATUS="failed"
+          fi
+          echo "Deployment status: $STATUS"
+          echo "Project URL: https://${{ github.event.inputs.cloudflare_project_name }}.pages.dev"
