@@ -56,18 +56,79 @@ jobs:
           version: 9
 
       - name: Install dependencies
-        run: pnpm install
+        run: |
+          echo "Installing dependencies..."
+          if [ -f "package.json" ]; then
+            cat package.json
+            pnpm install
+          else
+            echo "ERROR: package.json not found!"
+            exit 1
+          fi
 
       - name: Build project
-        run: pnpm run build
+        run: |
+          echo "Building project..."
+          pnpm run build || {
+            echo "Build failed! Checking for errors..."
+            echo "Package.json scripts:"
+            cat package.json | grep -A 10 "scripts"
+            exit 1
+          }
+          echo "Build complete, checking output..."
+          ls -la
+          if [ -d "dist" ]; then
+            echo "✓ dist folder exists"
+            ls -la dist
+          else
+            echo "✗ dist folder not found!"
+            echo "Checking for other build outputs..."
+            find . -type d -name "build" -o -name "out" -o -name ".next" | head -5
+            exit 1
+          fi
 
       - name: Deploy to Cloudflare Pages
         id: deploy
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ github.event.inputs.cloudflare_api_token }}
-          accountId: ${{ github.event.inputs.cloudflare_account_id }}
-          command: pages deploy dist --project-name=${{ github.event.inputs.cloudflare_project_name }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ github.event.inputs.cloudflare_api_token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ github.event.inputs.cloudflare_account_id }}
+        run: |
+          echo "Deploying to Cloudflare Pages..."
+          echo "Project name: ${{ github.event.inputs.cloudflare_project_name }}"
+          echo "Account ID: ${{ github.event.inputs.cloudflare_account_id }}"
+          
+          # Check if dist folder exists
+          if [ ! -d "dist" ]; then
+            echo "ERROR: dist folder not found!"
+            echo "Available directories:"
+            ls -la
+            exit 1
+          fi
+          
+          echo "Dist folder contents:"
+          ls -la dist
+          
+          # Install wrangler globally
+          npm install -g wrangler
+          
+          # Deploy with detailed logging
+          wrangler pages deploy dist \
+            --project-name="${{ github.event.inputs.cloudflare_project_name }}" \
+            --branch=main \
+            --commit-dirty=true \
+            2>&1 | tee deploy.log || {
+            echo "=== DEPLOYMENT FAILED ==="
+            echo "Wrangler version:"
+            wrangler --version
+            echo "Deploy log:"
+            cat deploy.log || echo "No log file"
+            echo "Environment check:"
+            echo "CLOUDFLARE_API_TOKEN length: ${#CLOUDFLARE_API_TOKEN}"
+            echo "CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID}"
+            exit 1
+          }
+          
+          echo "=== DEPLOYMENT SUCCESSFUL ==="
 
       # Custom domain DNS setup (uncomment when ready):
       # - name: Setup Custom Domain DNS
