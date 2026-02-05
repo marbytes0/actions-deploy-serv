@@ -93,42 +93,97 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ github.event.inputs.cloudflare_api_token }}
           CLOUDFLARE_ACCOUNT_ID: ${{ github.event.inputs.cloudflare_account_id }}
         run: |
-          echo "Deploying to Cloudflare Pages..."
+          echo "=== STARTING CLOUDFLARE DEPLOYMENT ==="
           echo "Project name: ${{ github.event.inputs.cloudflare_project_name }}"
           echo "Account ID: ${{ github.event.inputs.cloudflare_account_id }}"
+          echo "Token length: ${#CLOUDFLARE_API_TOKEN}"
+          echo ""
           
           # Check if dist folder exists
           if [ ! -d "dist" ]; then
-            echo "ERROR: dist folder not found!"
+            echo "❌ ERROR: dist folder not found!"
             echo "Available directories:"
             ls -la
             exit 1
           fi
           
+          echo "✓ Dist folder exists"
           echo "Dist folder contents:"
           ls -la dist
+          echo ""
           
           # Install wrangler globally
+          echo "Installing wrangler..."
           npm install -g wrangler
+          echo "✓ Wrangler installed"
+          
+          # Check wrangler version
+          echo "Wrangler version:"
+          wrangler --version
+          echo ""
           
           # Deploy with detailed logging
-          wrangler pages deploy dist \
+          echo "=== DEPLOYING TO CLOUDFLARE PAGES ==="
+          
+          # First, try to create the project (will fail if exists, but that's ok)
+          echo "Creating Cloudflare Pages project..."
+          wrangler pages project create "${{ github.event.inputs.cloudflare_project_name }}" --production-branch=main || echo "Project might already exist, continuing..."
+          echo ""
+          
+          # Now deploy
+          echo "Deploying to Cloudflare Pages..."
+          if wrangler pages deploy dist \
             --project-name="${{ github.event.inputs.cloudflare_project_name }}" \
             --branch=main \
-            --commit-dirty=true \
-            2>&1 | tee deploy.log || {
-            echo "=== DEPLOYMENT FAILED ==="
-            echo "Wrangler version:"
-            wrangler --version
-            echo "Deploy log:"
-            cat deploy.log || echo "No log file"
+            --commit-dirty=true; then
+            echo ""
+            echo "=== ✅ DEPLOYMENT SUCCESSFUL ==="
+            echo "Project URL: https://${{ github.event.inputs.cloudflare_project_name }}.pages.dev"
+          else
+            DEPLOY_EXIT_CODE=$?
+            echo ""
+            echo "=== ❌ DEPLOYMENT FAILED ==="
+            echo "Exit code: $DEPLOY_EXIT_CODE"
+            echo "Wrangler version: $(wrangler --version)"
             echo "Environment check:"
-            echo "CLOUDFLARE_API_TOKEN length: ${#CLOUDFLARE_API_TOKEN}"
-            echo "CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID}"
-            exit 1
-          }
+            echo "- CLOUDFLARE_API_TOKEN length: ${#CLOUDFLARE_API_TOKEN}"
+            echo "- CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID}"
+            echo "- Project name: ${{ github.event.inputs.cloudflare_project_name }}"
+            echo ""
+            echo "Common issues:"
+            echo "1. Project doesn't exist - use --yes flag to auto-create"
+            echo "2. Invalid API token or Account ID"
+            echo "3. Project name contains invalid characters"
+            exit $DEPLOY_EXIT_CODE
+          fi
+
+      - name: Verify Cloudflare deployment
+        if: steps.deploy.outcome == 'success'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ github.event.inputs.cloudflare_api_token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ github.event.inputs.cloudflare_account_id }}
+        run: |
+          echo "=== VERIFYING DEPLOYMENT ==="
+          echo "Checking if project exists in Cloudflare Pages..."
           
-          echo "=== DEPLOYMENT SUCCESSFUL ==="
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${{ github.event.inputs.cloudflare_project_name }}")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          
+          echo "HTTP Status: $HTTP_CODE"
+          echo "Response: $BODY"
+          
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Project verified in Cloudflare Pages!"
+            echo "$BODY" | grep -o '"url":"[^"]*"' | head -1
+          else
+            echo "⚠️  Warning: Could not verify project (this might be normal for first deployment)"
+            echo "The project may take a few moments to appear in the API"
+          fi
 
       # Custom domain DNS setup (uncomment when ready):
       # - name: Setup Custom Domain DNS
