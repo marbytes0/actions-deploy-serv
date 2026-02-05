@@ -21,10 +21,19 @@ on:
       app_id:
         description: 'App ID for callback'
         required: true
-      custom_domain:
-        description: 'Custom domain (optional)'
-        required: false
-        default: ''
+      # Custom domain inputs (uncomment when ready):
+      # cloudflare_zone_id:
+      #   description: 'Cloudflare Zone ID for custom domain'
+      #   required: false
+      #   default: ''
+      # cloudflare_api_dns_token:
+      #   description: 'Cloudflare API DNS Token for custom domain'
+      #   required: false
+      #   default: ''
+      # custom_domain:
+      #   description: 'Custom domain subdomain (e.g., myapp for myapp.yourdomain.com)'
+      #   required: false
+      #   default: ''
 
 jobs:
   deploy:
@@ -60,6 +69,21 @@ jobs:
           accountId: ${{ github.event.inputs.cloudflare_account_id }}
           command: pages deploy dist --project-name=${{ github.event.inputs.cloudflare_project_name }}
 
+      # Custom domain DNS setup (uncomment when ready):
+      # - name: Setup Custom Domain DNS
+      #   if: ${{ github.event.inputs.custom_domain != '' }}
+      #   run: |
+      #     curl -X POST "https://api.cloudflare.com/client/v4/zones/${{ github.event.inputs.cloudflare_zone_id }}/dns_records" \
+      #       -H "Authorization: Bearer ${{ github.event.inputs.cloudflare_api_dns_token }}" \
+      #       -H "Content-Type: application/json" \
+      #       --data '{
+      #         "type": "CNAME",
+      #         "name": "${{ github.event.inputs.custom_domain }}",
+      #         "content": "${{ github.event.inputs.cloudflare_project_name }}.pages.dev",
+      #         "ttl": 1,
+      #         "proxied": true
+      #       }'
+
       - name: Send callback notification
         if: always()
         run: |
@@ -68,5 +92,21 @@ jobs:
           else
             STATUS="failed"
           fi
+          
           echo "Deployment status: $STATUS"
           echo "Project URL: https://${{ github.event.inputs.cloudflare_project_name }}.pages.dev"
+          
+          # Send callback to app (use APP_URL secret or default to localhost)
+          APP_URL="${{ secrets.APP_URL }}"
+          if [ -z "$APP_URL" ]; then
+            APP_URL="http://localhost:3000"
+          fi
+          
+          curl -X POST "${APP_URL}/api/cloudflare-deploy-callback" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"appId\": \"${{ github.event.inputs.app_id }}\",
+              \"status\": \"${STATUS}\",
+              \"url\": \"https://${{ github.event.inputs.cloudflare_project_name }}.pages.dev\",
+              \"projectName\": \"${{ github.event.inputs.cloudflare_project_name }}\"
+            }" || echo "Failed to send callback (this is normal if app is not accessible)"
