@@ -58,6 +58,18 @@ jobs:
       - name: Install dependencies
         run: |
           echo "Installing dependencies..."
+          
+          # Send progress update
+          APP_URL="${{ secrets.APP_URL }}"
+          if [ -z "$APP_URL" ]; then
+            APP_URL="http://localhost:3000"
+          fi
+          
+          curl -X POST "${APP_URL}/api/cloudflare-deploy-progress" \
+            -H "Content-Type: application/json" \
+            -d "{\"appId\":\"${{ github.event.inputs.app_id }}\",\"stage\":\"installing\",\"percentage\":30,\"message\":\"Installing dependencies...\"}" \
+            || echo "Failed to send progress update (non-critical)"
+          
           if [ -f "package.json" ]; then
             cat package.json
             pnpm install
@@ -69,6 +81,18 @@ jobs:
       - name: Build project
         run: |
           echo "Building project..."
+          
+          # Send progress update
+          APP_URL="${{ secrets.APP_URL }}"
+          if [ -z "$APP_URL" ]; then
+            APP_URL="http://localhost:3000"
+          fi
+          
+          curl -X POST "${APP_URL}/api/cloudflare-deploy-progress" \
+            -H "Content-Type: application/json" \
+            -d "{\"appId\":\"${{ github.event.inputs.app_id }}\",\"stage\":\"building\",\"percentage\":50,\"message\":\"Building project...\"}" \
+            || echo "Failed to send progress update (non-critical)"
+          
           pnpm run build || {
             echo "Build failed! Checking for errors..."
             echo "Package.json scripts:"
@@ -98,6 +122,17 @@ jobs:
           echo "Account ID: ${{ github.event.inputs.cloudflare_account_id }}"
           echo "Token length: ${#CLOUDFLARE_API_TOKEN}"
           echo ""
+          
+          # Send progress update
+          APP_URL="${{ secrets.APP_URL }}"
+          if [ -z "$APP_URL" ]; then
+            APP_URL="http://localhost:3000"
+          fi
+          
+          curl -X POST "${APP_URL}/api/cloudflare-deploy-progress" \
+            -H "Content-Type: application/json" \
+            -d "{\"appId\":\"${{ github.event.inputs.app_id }}\",\"stage\":\"deploying\",\"percentage\":70,\"message\":\"Deploying to Cloudflare Pages...\"}" \
+            || echo "Failed to send progress update (non-critical)"
           
           # Check if dist folder exists
           if [ ! -d "dist" ]; then
@@ -130,15 +165,34 @@ jobs:
           wrangler pages project create "${{ github.event.inputs.cloudflare_project_name }}" --production-branch=main || echo "Project might already exist, continuing..."
           echo ""
           
+          # Send progress update
+          curl -X POST "${APP_URL}/api/cloudflare-deploy-progress" \
+            -H "Content-Type: application/json" \
+            -d "{\"appId\":\"${{ github.event.inputs.app_id }}\",\"stage\":\"deploying\",\"percentage\":85,\"message\":\"Uploading files to Cloudflare...\"}" \
+            || echo "Failed to send progress update (non-critical)"
+          
           # Now deploy
           echo "Deploying to Cloudflare Pages..."
+          DEPLOY_START=$(date +%s)
+          
           if wrangler pages deploy dist \
             --project-name="${{ github.event.inputs.cloudflare_project_name }}" \
             --branch=main \
             --commit-dirty=true; then
+            
+            DEPLOY_END=$(date +%s)
+            DEPLOY_TIME=$((DEPLOY_END - DEPLOY_START))
+            
             echo ""
             echo "=== ✅ DEPLOYMENT SUCCESSFUL ==="
             echo "Project URL: https://${{ github.event.inputs.cloudflare_project_name }}.pages.dev"
+            echo "Deployment time: ${DEPLOY_TIME}s"
+            
+            # Send final progress update
+            curl -X POST "${APP_URL}/api/cloudflare-deploy-progress" \
+              -H "Content-Type: application/json" \
+              -d "{\"appId\":\"${{ github.event.inputs.app_id }}\",\"stage\":\"completed\",\"percentage\":100,\"message\":\"Deployment completed successfully in ${DEPLOY_TIME}s\"}" \
+              || echo "Failed to send progress update (non-critical)"
           else
             DEPLOY_EXIT_CODE=$?
             echo ""
@@ -154,6 +208,13 @@ jobs:
             echo "1. Project doesn't exist - use --yes flag to auto-create"
             echo "2. Invalid API token or Account ID"
             echo "3. Project name contains invalid characters"
+            
+            # Send failure progress update
+            curl -X POST "${APP_URL}/api/cloudflare-deploy-progress" \
+              -H "Content-Type: application/json" \
+              -d "{\"appId\":\"${{ github.event.inputs.app_id }}\",\"stage\":\"failed\",\"percentage\":0,\"message\":\"Deployment failed with exit code ${DEPLOY_EXIT_CODE}\",\"error\":\"Wrangler deployment failed\"}" \
+              || echo "Failed to send progress update (non-critical)"
+            
             exit $DEPLOY_EXIT_CODE
           fi
 
@@ -183,6 +244,53 @@ jobs:
           else
             echo "⚠️  Warning: Could not verify project (this might be normal for first deployment)"
             echo "The project may take a few moments to appear in the API"
+          fi
+
+      - name: Send callback notification
+        if: always()
+        run: |
+          APP_URL="${{ secrets.APP_URL }}"
+          if [ -z "$APP_URL" ]; then
+            APP_URL="http://localhost:3000"
+          fi
+          
+          if [ "${{ job.status }}" == "success" ] && [ "${{ steps.deploy.outcome }}" == "success" ]; then
+            STATUS="completed"
+            ERROR=""
+          else
+            STATUS="failed"
+            ERROR="Deployment failed - check workflow logs"
+          fi
+          
+          echo "=== SENDING DEPLOYMENT CALLBACK ==="
+          echo "Deployment status: $STATUS"
+          echo "Project URL: https://${{ github.event.inputs.cloudflare_project_name }}.pages.dev"
+          echo "App URL: ${APP_URL}"
+          
+          # Send callback to app
+          CALLBACK_RESPONSE=$(curl -X POST "${APP_URL}/api/cloudflare-deploy-callback" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"appId\": \"${{ github.event.inputs.app_id }}\",
+              \"status\": \"${STATUS}\",
+              \"url\": \"https://${{ github.event.inputs.cloudflare_project_name }}.pages.dev\",
+              \"projectName\": \"${{ github.event.inputs.cloudflare_project_name }}\",
+              \"error\": \"${ERROR}\"
+            }" \
+            -w "\nHTTP_CODE:%{http_code}" \
+            -s)
+          
+          HTTP_CODE=$(echo "$CALLBACK_RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
+          RESPONSE_BODY=$(echo "$CALLBACK_RESPONSE" | grep -v "HTTP_CODE:")
+          
+          echo "Callback HTTP Code: $HTTP_CODE"
+          echo "Callback Response: $RESPONSE_BODY"
+          
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Callback sent successfully"
+          else
+            echo "⚠️  Warning: Callback failed (HTTP $HTTP_CODE)"
+            echo "This is normal if app is not accessible from GitHub Actions"
           fi
 
       # Custom domain DNS setup (uncomment when ready):
